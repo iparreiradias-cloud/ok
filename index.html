@@ -57,7 +57,6 @@
     <div style="margin-top:12px">
       <div style="font-weight:600">Carregar planilha (.xlsx/.csv)</div>
       <input id="fileInput" type="file" accept=".xlsx,.xls,.csv" style="margin-top:8px;width:100%" />
-      <div class="meta" style="margin-top:6px">Usa colunas: B=Data de entrada, J=Máquina, L=Componente. Ajuste em <code>COLUMN_LETTERS</code> se necessário.</div>
     </div>
 
     <div style="margin-top:12px">
@@ -75,17 +74,11 @@
       </div>
 
       <div style="margin-top:10px;display:flex;gap:8px">
-        <button class="btn" onclick="exportExample()">Exportar CSV</button>
-        <button class="btn" style="background:#444" onclick="resetView()">Resetar</button>
+        <button class="btn" style="background:#444;width:100%" onclick="resetView()">Resetar</button>
       </div>
     </div>
 
-    <div style="margin-top:18px">
-      <div style="font-weight:600">Exemplo rápido (dados)</div>
-      <div id="machineStats" style="margin-top:8px;color:#333"></div>
-    </div>
 
-    <div style="margin-top:18px;color:#777;font-size:13px">Suba sua imagem da planta ou troque os hotspots pelo painel de edição no código.</div>
   </aside>
 
   <main class="map-area">
@@ -549,13 +542,6 @@ function resetView(){
   renderMachineHotspots();
 }
 
-function exportExample(){
-  const rows = [['machine','lastBreak','stops30','totalStops']];
-  for(const k in DB.machines){ const m=DB.machines[k]; rows.push([m.name, m.lastBreak || '', m.stops30 || 0, (m.paradas?.length||0)]); }
-  const csv = rows.map(r=>r.map(c=>`"${c}"`).join(',')).join('\n');
-  const blob = new Blob([csv],{type:'text/csv'});
-  const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href=url; a.download='paradas.csv'; a.click(); URL.revokeObjectURL(url);
-}
 
 function openComponentDetails(){ alert('Aqui poderia abrir uma página com histórico/tablets, ou navegar para um dashboard externo (PowerBI / Grafana)'); }
 function goToOI(){ alert('Abrir OI / Sistema de Histórico — placeholder'); }
