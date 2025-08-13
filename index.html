@@ -68,8 +68,9 @@
           <input id="dateStart" type="date" style="flex:1;padding:8px;border-radius:6px;border:1px solid #ddd" />
           <input id="dateEnd" type="date" style="flex:1;padding:8px;border-radius:6px;border:1px solid #ddd" />
         </div>
-        <div style="margin-top:8px">
+        <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn" onclick="applyDateFilter()">Aplicar filtro</button>
+          <button class="btn" style="background:#6c757d" onclick="clearDateFilter()">Limpar filtros</button>
         </div>
       </div>
 
@@ -346,15 +347,20 @@ function applyDateFilter(){
   const end = document.getElementById('dateEnd').value || null;
   setDateFilter(start, end);
   const newDB = getFilteredDB();
-  // manter currentMachine se existir
-  const prevMachine = currentMachineKey;
   DB = newDB;
+  currentMachineKey = null;
   renderMachineHotspots();
-  if (prevMachine && DB.machines[prevMachine]){
-    onSelectMachine(prevMachine);
-  } else {
-    resetView();
-  }
+  resetView();
+}
+
+function clearDateFilter(){
+  document.getElementById('dateStart').value = '';
+  document.getElementById('dateEnd').value = '';
+  setDateFilter(null, null);
+  DB = buildDBFromRawEvents(RAW_EVENTS.length ? RAW_EVENTS : []);
+  currentMachineKey = null;
+  renderMachineHotspots();
+  resetView();
 }
 
 // ================= Renderização de Hotspots =================
