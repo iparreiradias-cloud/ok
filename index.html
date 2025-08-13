@@ -1,0 +1,495 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Protótipo: Mapa Interativo - Planta / Máquina / Componentes</title>
+  <style>
+    :root{--bg:#f6f7fb;--accent:#d6336c;--panel:#fff}
+    body{font-family:Inter,system-ui,Segoe UI,Arial; margin:0; background:var(--bg)}
+    .app{display:flex;height:100vh;}
+    /* Painel lateral */
+    .sidebar{width:360px;background:var(--panel);box-shadow:2px 0 8px rgba(10,10,10,0.08);padding:18px;overflow:auto}
+    .sidebar h2{margin:4px 0 12px;font-size:20px}
+    .sidebar .meta{color:#845;font-size:13px;margin-bottom:12px}
+    .info-row{margin:10px 0;padding:10px;border-radius:8px;background:#fbfbfd;border:1px solid #eee}
+    .btn{display:inline-block;padding:8px 12px;border-radius:8px;background:var(--accent);color:white;text-decoration:none;cursor:pointer}
+
+    /* Área do mapa */
+    .map-area{flex:1;position:relative;display:flex;align-items:center;justify-content:center;overflow:hidden}
+    .canvas{position:relative;background:#fff;border-radius:6px;box-shadow:0 6px 18px rgba(10,10,10,0.06);max-width:1200px;max-height:880px;width:95%;height:90%}
+    .base-img{width:100%;height:100%;object-fit:contain;display:block;transition:transform .2s ease}
+
+    /* Hotspots como botões circulares */
+    .hotspot{position:absolute;width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 10px rgba(0,0,0,0.12);cursor:pointer;border:3px solid rgba(255,255,255,0.92);background:linear-gradient(180deg,#fff,#f2f2f8)}
+    .hotspot .dot{width:14px;height:14px;border-radius:50%;background:var(--accent)}
+    .hotspot:hover{transform:scale(1.08)}
+
+    /* Overlay da máquina (drill-down) */
+    .overlay{position:absolute;inset:0;background:rgba(5,7,12,0.45);display:none;align-items:center;justify-content:center}
+    .overlay .card{width:900px;height:640px;background:#fff;border-radius:10px;position:relative;padding:16px;display:flex}
+    .machine-left{flex:0 0 60%;position:relative;border-right:1px solid #eee;padding-right:12px}
+    .machine-right{flex:1;padding-left:12px;overflow:auto}
+    .machine-img{width:100%;height:100%;object-fit:contain}
+    .comp-hotspot{position:absolute;width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:#fff;border:2px solid #333;cursor:pointer}
+
+    /* Zoom controls */
+    .controls{position:absolute;right:12px;top:12px;display:flex;flex-direction:column;gap:8px}
+    .controls button{width:42px;height:34px;border-radius:6px;border:none;background:#fff;box-shadow:0 4px 10px rgba(0,0,0,0.08);cursor:pointer}
+    .close-x{position:absolute;right:14px;top:8px;cursor:pointer}
+
+    /* Responsividade */
+    @media (max-width:900px){.sidebar{display:none}.canvas{max-width:100%;height:100%}}
+  </style>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <h2>Mapa de Quebras — Planta de Centrifugação</h2>
+    <div class="meta">Clique em uma máquina no mapa para ver detalhes e explorar componentes.</div>
+
+    <div id="selectedInfo" class="info-row">
+      <strong>Nenhuma máquina selecionada</strong>
+      <div class="meta">Clique em um hotspot na planta para carregar as informações.</div>
+    </div>
+
+    <div style="margin-top:12px">
+      <div style="font-weight:600">Carregar planilha (.xlsx/.csv)</div>
+      <input id="fileInput" type="file" accept=".xlsx,.xls,.csv" style="margin-top:8px;width:100%" />
+      <div class="meta" style="margin-top:6px">Usa colunas: B=Data de entrada, J=Máquina, L=Componente. Ajuste em <code>COLUMN_LETTERS</code> se necessário.</div>
+    </div>
+
+    <div style="margin-top:12px">
+      <div style="font-weight:600">Filtros / Ações</div>
+      <div style="margin-top:8px">
+        <label style="font-size:13px;color:#555">Período</label>
+        <select id="periodSelect" style="width:100%;margin-top:6px;padding:8px;border-radius:6px;border:1px solid #ddd">
+          <option>Últimas 24h</option>
+          <option>Últimos 7 dias</option>
+          <option>Últimos 30 dias</option>
+        </select>
+      </div>
+
+      <div style="margin-top:10px;display:flex;gap:8px">
+        <button class="btn" onclick="exportExample()">Exportar CSV</button>
+        <button class="btn" style="background:#444" onclick="resetView()">Resetar</button>
+      </div>
+    </div>
+
+    <div style="margin-top:18px">
+      <div style="font-weight:600">Exemplo rápido (dados)</div>
+      <div id="machineStats" style="margin-top:8px;color:#333"></div>
+    </div>
+
+    <div style="margin-top:18px;color:#777;font-size:13px">Suba sua imagem da planta ou troque os hotspots pelo painel de edição no código.</div>
+  </aside>
+
+  <main class="map-area">
+    <div class="canvas" id="canvas">
+      <img id="plant" class="base-img" src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='1600' height='1000'><rect width='100%' height='100%' fill='%23ffffff'/><text x='50' y='60' font-size='42' fill='%23333'>Planta: Área de Centrifugação (exemplo)</text><rect x='100' y='120' width='300' height='220' fill='%23f8e6f0' stroke='%23e6c2d3' /><text x='120' y='160' font-size='20' fill='%23333'>Lado A - Bancadas</text><rect x='480' y='120' width='420' height='220' fill='%23f2f2f2' stroke='%23d8d8d8'/><text x='500' y='160' font-size='20' fill='%23333'>Área Centrífugas</text></svg>" alt="planta"/>
+
+      <!-- Hotspots são criados dinamicamente -->
+
+      <div class="controls">
+        <button id="zoomIn">+</button>
+        <button id="zoomOut">−</button>
+      </div>
+
+      <!-- overlay drill-down -->
+      <div id="overlay" class="overlay">
+        <div class="card">
+          <div class="machine-left">
+            <img id="machineImg" class="machine-img" src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='900' height='640'><rect width='100%' height='100%' fill='%23fff'/><text x='20' y='32' font-size='22' fill='%23333'>Máquina — Visualização detalhada (exemplo)</text><rect x='40' y='80' width='380' height='420' fill='%23f7f7fa' stroke='%23ddd'/><text x='64' y='120' font-size='16' fill='%23333'>Vista da Máquina (imagem técnica)</text></svg>" />
+
+            <!-- hotspots de componentes serão criados dinamicamente -->
+          </div>
+
+          <div class="machine-right">
+            <div style="display:flex;align-items:center;justify-content:space-between">
+              <h3 id="machineTitle">Máquina</h3>
+              <div class="close-x"><button onclick="closeOverlay()">Fechar</button></div>
+            </div>
+
+            <div id="machinePanel">
+              <div style="margin:10px 0"><strong>Última quebra:</strong> <span id="lastBreak">—</span></div>
+              <div style="margin:10px 0"><strong>Total paradas (30d):</strong> <span id="totalStops">—</span></div>
+              <div style="margin:10px 0"><strong>Tempo médio parada:</strong> <span id="avgStop">—</span></div>
+              <div style="margin:10px 0"><strong>Motivos mais comuns:</strong>
+                <ul id="commonReasons"></ul>
+              </div>
+              <div style="margin-top:12px">
+                <button class="btn" onclick="openComponentDetails()">Ver componentes</button>
+                <button class="btn" style="background:#0b74de;margin-left:8px" onclick="goToOI()">Abrir OS/Histórico</button>
+              </div>
+            </div>
+
+            <hr style="margin:12px 0;border:none;border-top:1px solid #eee">
+
+            <div id="componentDetails"></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </main>
+</div>
+
+<!-- SheetJS para ler Excel/CSV no navegador -->
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script>
+// ================= Utilitários =================
+const COLUMN_LETTERS = { date: 'B', machine: 'J', component: 'L' };
+const MACHINE_COORDS = {
+  // Coordenadas de exemplo para nomes comuns; ajuste conforme sua planta
+  'maquina-1': { left: '58%', top: '32%' },
+  'maquina-2': { left: '72%', top: '35%' },
+  'maquina-5': { left: '64%', top: '50%' },
+  'maquina-8': { left: '78%', top: '60%' },
+  'forno-it09': { left: '35%', top: '40%' },
+  'forno-rsii': { left: '45%', top: '60%' }
+};
+
+// Filtro opcional para exibir somente máquinas específicas
+const ALLOWED_MACHINE_IDS = ['maquina-1','maquina-2','maquina-5','maquina-8','forno-it09','forno-rsii'];
+const FILTER_TO_ALLOWED = false; // altere para true para restringir aos IDs acima
+
+function colLetterToIndex(letters){
+  let col = 0; const up = letters.toUpperCase();
+  for (let i=0;i<up.length;i++){ col = col*26 + (up.charCodeAt(i)-64); }
+  return col-1; // zero-based
+}
+
+const COL_INDEX = {
+  date: colLetterToIndex(COLUMN_LETTERS.date),
+  machine: colLetterToIndex(COLUMN_LETTERS.machine),
+  component: colLetterToIndex(COLUMN_LETTERS.component)
+};
+
+function slugify(str){
+  return String(str||'').trim().toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+    .replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'');
+}
+
+// Normalização de variações para um ID canônico
+const MACHINE_ALIASES = {
+  'maquina-01': 'maquina-1',
+  'maquina-02': 'maquina-2',
+  'maquina-05': 'maquina-5',
+  'maquina-08': 'maquina-8',
+  'forno-it-09': 'forno-it09',
+  'forno-rs-ii': 'forno-rsii',
+  'forno-rs-2': 'forno-rsii'
+};
+function canonicalizeMachineSlug(slug){
+  if (!slug) return slug;
+  if (/^maquina-0[1-9]$/.test(slug)) slug = slug.replace('-0','-');
+  return MACHINE_ALIASES[slug] || slug;
+}
+
+function toStringSafe(v){ return (v===undefined||v===null) ? '' : String(v).trim(); }
+
+function parseExcelDate(value){
+  if (!value && value !== 0) return null;
+  if (value instanceof Date) return value;
+  if (typeof value === 'number'){
+    const utcDays = Math.floor(value - 25569);
+    const utcValue = utcDays * 86400;
+    const dateInfo = new Date(utcValue * 1000);
+    return new Date(dateInfo.getFullYear(), dateInfo.getMonth(), dateInfo.getDate());
+  }
+  if (typeof value === 'string'){
+    const s = value.trim();
+    // dd/mm/aaaa ou dd-mm-aaaa ou dd.mm.aaaa
+    const m = s.match(/^(\d{1,2})[\/\.-](\d{1,2})[\/\.-](\d{2,4})$/);
+    if (m){
+      let d = parseInt(m[1],10), mo = parseInt(m[2],10), y = parseInt(m[3],10);
+      if (y < 100) y = y + (y < 50 ? 2000 : 1900);
+      const dt = new Date(y, mo-1, d);
+      if (!isNaN(dt)) return dt;
+    }
+    const d2 = new Date(s);
+    if (!isNaN(d2)) return d2;
+  }
+  return null;
+}
+
+function formatDateISO(d){
+  if (!(d instanceof Date)) return '';
+  const y = d.getFullYear();
+  const m = String(d.getMonth()+1).padStart(2,'0');
+  const da = String(d.getDate()).padStart(2,'0');
+  return `${y}-${m}-${da}`;
+}
+
+function generateGridPositions(total){
+  const positions = [];
+  if (total <= 0) return positions;
+  const cols = Math.ceil(Math.sqrt(total));
+  const rows = Math.ceil(total / cols);
+  for (let i=0;i<total;i++){
+    const r = Math.floor(i / cols);
+    const c = i % cols;
+    const left = cols === 1 ? 50 : 20 + (c * (60/(cols-1)));
+    const top = rows === 1 ? 55 : 25 + (r * (50/(rows-1)));
+    positions.push({ left: `${left}%`, top: `${top}%` });
+  }
+  return positions;
+}
+
+// ================= Estado / DB =================
+function getSampleDB(){
+  return {
+    machines: {
+      'm01': {id:'m01', name:'Centrífuga 01', lastBreak:'2025-08-10', stops30:7, avgStop:'26 min', reasons:['Rolamento','Desbalanceamento','Fuga de líquido'], paradas:['2025-08-10','2025-08-09','2025-08-01'], components: {
+          'Rolamento':{id:'rol-01', name:'Rolamento X', lastFail:'2025-08-09', failures:3, notes:'Troca preventiva sugerida'},
+          'Motor':{id:'mtr-01', name:'Motor Y', lastFail:'2025-06-10', failures:1, notes:'Vibração leve'},
+          'Eixo':{id:'eix-01', name:'Eixo Z', lastFail:'2025-04-12', failures:0, notes:'OK'}
+        }
+      },
+      'm02': {id:'m02', name:'Centrífuga 02', lastBreak:'2025-08-11', stops30:3, avgStop:'12 min', reasons:['Falta matéria prima','Configuração'], paradas:['2025-08-11','2025-08-06'], components:{
+          'Rolamento':{id:'rol-02', name:'Rolamento A', lastFail:'2025-07-02', failures:2, notes:'Rever lubrificação'},
+          'Motor':{id:'mtr-02', name:'Motor B', lastFail:'2025-03-01', failures:0, notes:'OK'}
+        }
+      }
+    }
+  };
+}
+
+let DB = getSampleDB();
+let currentMachineKey = null;
+
+// ================= Renderização de Hotspots =================
+function renderMachineHotspots(){
+  const canvas = document.getElementById('canvas');
+  // Remover hotspots existentes
+  canvas.querySelectorAll('.hotspot').forEach(el => el.remove());
+
+  let machineList = Object.values(DB.machines || {});
+  if (FILTER_TO_ALLOWED){
+    machineList = machineList.filter(m => ALLOWED_MACHINE_IDS.includes(m.id));
+  }
+  if (machineList.length === 0) return;
+
+  const fallbackPositions = generateGridPositions(machineList.length);
+  let fallbackIdx = 0;
+
+  for (const machine of machineList){
+    const coord = MACHINE_COORDS[machine.id] || fallbackPositions[fallbackIdx++] || {left:'50%', top:'50%'};
+    const el = document.createElement('div');
+    el.className = 'hotspot';
+    el.dataset.id = machine.id;
+    el.title = machine.name;
+    el.style.left = coord.left;
+    el.style.top = coord.top;
+    el.style.transform = 'translate(-50%,-50%)';
+    el.innerHTML = '<div class="dot"></div>';
+    el.addEventListener('click', () => onSelectMachine(machine.id));
+    canvas.appendChild(el);
+  }
+}
+
+// ================= Lógica de seleção e UI =================
+const selectedInfo = document.getElementById('selectedInfo');
+const machineStats = document.getElementById('machineStats');
+const overlay = document.getElementById('overlay');
+const machineTitle = document.getElementById('machineTitle');
+const lastBreakEl = document.getElementById('lastBreak');
+const totalStopsEl = document.getElementById('totalStops');
+const avgStopEl = document.getElementById('avgStop');
+const commonReasons = document.getElementById('commonReasons');
+const componentDetails = document.getElementById('componentDetails');
+
+function onSelectMachine(id){
+  const m = DB.machines[id];
+  if(!m) return;
+  currentMachineKey = id;
+  const last = m.lastBreak || (m.paradas && m.paradas.length ? m.paradas[0] : '—');
+  selectedInfo.innerHTML = `<strong>${m.name} (${m.id})</strong>\n<div class="meta">Última quebra: ${last} — Paradas 30d: ${m.stops30 ?? 0}</div>`;
+  machineStats.innerHTML = `<div><strong>${m.name}</strong></div><div style="color:#555;margin-top:6px">Paradas (30d): ${m.stops30 ?? 0} · Média: ${m.avgStop || 'N/D'}</div>`;
+  openOverlayFor(id);
+}
+
+function openOverlayFor(id){
+  const m = DB.machines[id];
+  if(!m) return;
+  currentMachineKey = id;
+  machineTitle.innerText = `${m.name} — ${m.id}`;
+
+  const paradas = Array.isArray(m.paradas) ? [...m.paradas] : [];
+  paradas.sort((a,b) => new Date(b) - new Date(a));
+
+  lastBreakEl.innerText = m.lastBreak || (paradas[0] || '—');
+  totalStopsEl.innerText = typeof m.stops30 === 'number' ? m.stops30 : paradas.length;
+  avgStopEl.innerText = m.avgStop || 'N/D';
+
+  // Motivos mais comuns: top componentes por falhas
+  const compEntries = Object.entries(m.components || {});
+  const ranked = compEntries
+    .map(([name, comp]) => ({ name, count: comp.failures ?? 0 }))
+    .sort((a,b) => b.count - a.count)
+    .slice(0,3);
+  if (ranked.length === 0) {
+    commonReasons.innerHTML = '<li>Dados não disponíveis</li>';
+  } else {
+    commonReasons.innerHTML = ranked.map(r => `<li>${r.name} (${r.count})</li>`).join('');
+  }
+
+  // Limpar hotspots de componentes
+  const machineLeft = document.querySelector('.machine-left');
+  machineLeft.querySelectorAll('.comp-hotspot').forEach(el => el.remove());
+
+  // Criar hotspots de componentes em grade
+  const compList = Object.keys(m.components || {});
+  const compPositions = generateGridPositions(compList.length);
+  compList.forEach((compName, idx) => {
+    const pos = compPositions[idx] || { left:'50%', top:'50%'};
+    const hotspot = document.createElement('div');
+    hotspot.className = 'comp-hotspot';
+    hotspot.textContent = compName.charAt(0).toUpperCase();
+    hotspot.title = m.components[compName].name || compName;
+    hotspot.style.left = pos.left;
+    hotspot.style.top = pos.top;
+    hotspot.style.transform = 'translate(-50%,-50%)';
+    hotspot.dataset.comp = compName;
+    hotspot.addEventListener('click', ()=> showComponent(compName));
+    machineLeft.appendChild(hotspot);
+  });
+
+  componentDetails.innerHTML = '<em>Selecione um componente no desenho para ver detalhes.</em>';
+  overlay.style.display = 'flex';
+}
+
+function closeOverlay(){ overlay.style.display = 'none'; }
+
+function showComponent(name){
+  const m = DB.machines[currentMachineKey];
+  if(!m){ componentDetails.innerHTML = '<div>Componente sem dados</div>'; return; }
+  const comp = m.components[name];
+  if(!comp){ componentDetails.innerHTML = '<div>Componente sem dados</div>'; return; }
+  componentDetails.innerHTML = `<div style=\"padding:8px;border-radius:8px;background:#fbfbfd;border:1px solid #eee\"><strong>${comp.name || name}</strong><div style=\"margin-top:6px\">ID: ${comp.id || '—'}</div><div style=\"margin-top:6px\">Última falha: ${comp.lastFail || '—'}</div><div style=\"margin-top:6px\">Total falhas: ${comp.failures ?? 0}</div><div style=\"margin-top:6px;color:#555\">Notas: ${comp.notes || '—'}</div><div style=\"margin-top:8px\"><button class=\"btn\">Abrir histórico detalhado</button></div></div>`;
+}
+
+// ================= Zoom =================
+let scale = 1;
+const plant = document.getElementById('plant');
+const canvas = document.getElementById('canvas');
+
+document.getElementById('zoomIn').addEventListener('click', ()=>{ scale = Math.min(2.5, scale+0.2); plant.style.transform = `scale(${scale})`; });
+document.getElementById('zoomOut').addEventListener('click', ()=>{ scale = Math.max(0.6, scale-0.2); plant.style.transform = `scale(${scale})`; });
+
+function resetView(){
+  scale = 1; plant.style.transform = `scale(1)`;
+  selectedInfo.innerHTML = '<strong>Nenhuma máquina selecionada</strong><div class="meta">Clique em um hotspot na planta para carregar as informações.</div>';
+  overlay.style.display='none';
+}
+
+function exportExample(){
+  const rows = [['machine','lastBreak','stops30','totalStops']];
+  for(const k in DB.machines){ const m=DB.machines[k]; rows.push([m.name, m.lastBreak || '', m.stops30 || 0, (m.paradas?.length||0)]); }
+  const csv = rows.map(r=>r.map(c=>`"${c}"`).join(',')).join('\n');
+  const blob = new Blob([csv],{type:'text/csv'});
+  const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href=url; a.download='paradas.csv'; a.click(); URL.revokeObjectURL(url);
+}
+
+function openComponentDetails(){ alert('Aqui poderia abrir uma página com histórico/tablets, ou navegar para um dashboard externo (PowerBI / Grafana)'); }
+function goToOI(){ alert('Abrir OI / Sistema de Histórico — placeholder'); }
+
+// ================= Importação da planilha =================
+const fileInput = document.getElementById('fileInput');
+fileInput.addEventListener('change', handleFileUpload);
+
+function handleFileUpload(ev){
+  const file = ev.target.files && ev.target.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try{
+      const data = new Uint8Array(e.target.result);
+      const wb = XLSX.read(data, { type: 'array', cellDates: true });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: '' });
+      DB = buildDBFromAOA(rows);
+      renderMachineHotspots();
+      resetView();
+      machineStats.innerHTML = '<div style="color:#0a0">Planilha carregada com sucesso.</div>';
+    }catch(err){
+      console.error(err);
+      alert('Falha ao ler a planilha. Verifique o arquivo.');
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function buildDBFromAOA(rows){
+  const idxDate = COL_INDEX.date;
+  const idxMachine = COL_INDEX.machine;
+  const idxComponent = COL_INDEX.component;
+
+  const machines = {};
+
+  for (let i=0; i<rows.length; i++){
+    const row = rows[i];
+    if (!row || !Array.isArray(row)) continue;
+
+    const machineName = toStringSafe(row[idxMachine]);
+    const componentNameRaw = row[idxComponent];
+    const componentName = toStringSafe(componentNameRaw) || 'Sem componente';
+    const dateObj = parseExcelDate(row[idxDate]);
+
+    if (!machineName || !dateObj) continue; // ignora linhas vazias / cabeçalho
+
+    const mKeyRaw = slugify(machineName) || `m-${i}`;
+    const mKey = canonicalizeMachineSlug(mKeyRaw);
+    if (!machines[mKey]){
+      machines[mKey] = {
+        id: mKey,
+        name: machineName,
+        paradas: [],
+        lastBreak: null,
+        stops30: 0,
+        avgStop: 'N/D',
+        reasons: [],
+        components: {}
+      };
+    }
+
+    const dateStr = formatDateISO(dateObj);
+    machines[mKey].paradas.push(dateStr);
+
+    if (!machines[mKey].components[componentName]){
+      machines[mKey].components[componentName] = {
+        id: slugify(componentName) || `comp-${i}`,
+        name: componentName,
+        failures: 0,
+        lastFail: null,
+        notes: ''
+      };
+    }
+    const comp = machines[mKey].components[componentName];
+    comp.failures += 1;
+    if (!comp.lastFail || new Date(dateStr) > new Date(comp.lastFail)) comp.lastFail = dateStr;
+  }
+
+  const now = new Date();
+  const last30 = new Date(now.getFullYear(), now.getMonth(), now.getDate()-30);
+  for (const key in machines){
+    const m = machines[key];
+    m.paradas.sort((a,b) => new Date(b) - new Date(a));
+    m.lastBreak = m.paradas[0] || null;
+    m.stops30 = m.paradas.filter(d => new Date(d) >= last30).length;
+
+    const entries = Object.entries(m.components).map(([name, comp]) => ({ name, count: comp.failures }));
+    entries.sort((a,b) => b.count - a.count);
+    m.reasons = entries.slice(0,3).map(e => e.name);
+  }
+
+  return { machines };
+}
+
+// ================= Inicialização =================
+renderMachineHotspots();
+resetView();
+</script>
+</body>
+</html>
