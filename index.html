@@ -32,7 +32,7 @@
     .machine-right{flex:1;padding-left:12px;overflow:auto}
     .machine-img{width:100%;height:100%;object-fit:contain}
     .comp-hotspot{position:absolute;width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:#fff;border:2px solid #333;cursor:pointer}
-    .machine-block{position:absolute;transform:translate(-50%,-50%);border-radius:6px;border:1px solid rgba(0,0,0,0.08);opacity:.5;z-index:1;pointer-events:none;display:flex;align-items:center;justify-content:center;color:#333;font-size:12px;font-weight:600}
+    
 
     /* Zoom controls */
     .controls{position:absolute;right:12px;top:12px;display:flex;flex-direction:column;gap:8px}
@@ -89,10 +89,7 @@
     <div class="canvas" id="canvas">
       <img id="plant" class="base-img" src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='1600' height='1000'><rect width='100%' height='100%' fill='%23ffffff'/><text x='50' y='60' font-size='42' fill='%23333'>Planta: Área de Centrifugação (exemplo)</text><rect x='100' y='120' width='300' height='220' fill='%23f8e6f0' stroke='%23e6c2d3' /><text x='120' y='160' font-size='20' fill='%23333'>Lado A - Bancadas</text><rect x='480' y='120' width='420' height='220' fill='%23f2f2f2' stroke='%23d8d8d8'/><text x='500' y='160' font-size='20' fill='%23333'>Área Centrífugas</text></svg>" alt="planta"/>
 
-      <!-- Hotspots e blocos são criados dinamicamente -->
-      <div id="blocksLayer"></div>
-
-      <style>#blocksLayer{position:absolute;inset:0}</style>
+      <!-- Hotspots são criados dinamicamente -->
       <div class="controls">
         <button id="zoomIn">+</button>
         <button id="zoomOut">−</button>
@@ -144,12 +141,12 @@
 const COLUMN_LETTERS = { date: 'B', machine: 'J', component: 'L' };
 const MACHINE_COORDS = {
   // Coordenadas de exemplo para nomes comuns; ajuste conforme sua planta
-  'maquina-1': { left: '58%', top: '32%', w: 140, h: 90, color:'#f8e6f0' },
-  'maquina-2': { left: '72%', top: '35%', w: 160, h: 100, color:'#fff8ee' },
-  'maquina-5': { left: '64%', top: '50%', w: 160, h: 100, color:'#e8f5ff' },
-  'maquina-8': { left: '78%', top: '60%', w: 160, h: 100, color:'#e9f7ef' },
-  'forno-it09': { left: '35%', top: '40%', w: 220, h: 120, color:'#f3e8ff' },
-  'forno-rsii': { left: '45%', top: '60%', w: 220, h: 120, color:'#fff3cd' }
+  'maquina-1': { left: '58%', top: '32%' },
+  'maquina-2': { left: '72%', top: '35%' },
+  'maquina-5': { left: '64%', top: '50%' },
+  'maquina-8': { left: '78%', top: '60%' },
+  'forno-it09': { left: '35%', top: '40%' },
+  'forno-rsii': { left: '45%', top: '60%' }
 };
 
 // Filtro opcional para exibir somente máquinas específicas
@@ -265,10 +262,8 @@ let currentMachineKey = null;
 // ================= Renderização de Hotspots =================
 function renderMachineHotspots(){
   const canvas = document.getElementById('canvas');
-  const blocksLayer = document.getElementById('blocksLayer');
-  // Remover hotspots e blocos existentes
+  // Remover hotspots existentes
   canvas.querySelectorAll('.hotspot').forEach(el => el.remove());
-  blocksLayer.innerHTML = '';
 
   let machineList = Object.values(DB.machines || {});
   if (FILTER_TO_ALLOWED){
@@ -281,18 +276,6 @@ function renderMachineHotspots(){
 
   for (const machine of machineList){
     const coord = MACHINE_COORDS[machine.id] || fallbackPositions[fallbackIdx++] || {left:'50%', top:'50%'};
-
-    // bloco de fundo
-    const block = document.createElement('div');
-    block.className = 'machine-block';
-    block.style.left = coord.left;
-    block.style.top = coord.top;
-    const w = coord.w || 160; const h = coord.h || 100;
-    block.style.width = w + 'px';
-    block.style.height = h + 'px';
-    block.style.background = coord.color || '#f2f2f2';
-    block.textContent = machine.name;
-    blocksLayer.appendChild(block);
 
     // hotspot do topo
     const el = document.createElement('div');
@@ -314,20 +297,13 @@ let isFocused = false;
 function enterFocusOnMachine(machineId){
   isFocused = true;
   const canvas = document.getElementById('canvas');
-  const blocksLayer = document.getElementById('blocksLayer');
 
   // Esconde todos hotspots de máquina
   canvas.querySelectorAll('.hotspot').forEach(el => { el.style.display = 'none'; });
-  // Esconde todos os blocos, exceto o da máquina
-  Array.from(blocksLayer.children).forEach(block => {
-    const isTarget = (block.textContent || '').trim() === (DB.machines[machineId]?.name || '');
-    block.style.display = isTarget ? 'block' : 'none';
-  });
 
-  // Zoom para o bloco da máquina
+  // Zoom para a máquina
   const coord = MACHINE_COORDS[machineId];
   if (coord){
-    // centralizar e aproximar a planta na máquina
     scale = 1.8;
     plant.style.transformOrigin = `${coord.left} ${coord.top}`;
     plant.style.transform = `scale(${scale})`;
