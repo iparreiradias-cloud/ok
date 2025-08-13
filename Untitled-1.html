@@ -1,0 +1,764 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Protótipo: Mapa Interativo - Planta / Máquina / Componentes</title>
+  <style>
+    :root{--bg:#f6f7fb;--accent:#d6336c;--panel:#fff}
+    body{font-family:Inter,system-ui,Segoe UI,Arial; margin:0; background:var(--bg)}
+    .app{display:flex;height:100vh;}
+    /* Painel lateral */
+    .sidebar{width:360px;background:var(--panel);box-shadow:2px 0 8px rgba(10,10,10,0.08);padding:18px;overflow:auto}
+    .sidebar h2{margin:4px 0 12px;font-size:20px}
+    .sidebar .meta{color:#845;font-size:13px;margin-bottom:12px}
+    .info-row{margin:10px 0;padding:10px;border-radius:8px;background:#fbfbfd;border:1px solid #eee}
+    .btn{display:inline-block;padding:8px 12px;border-radius:8px;background:var(--accent);color:white;text-decoration:none;cursor:pointer}
+
+    /* Área do mapa */
+    .map-area{flex:1;position:relative;display:flex;align-items:center;justify-content:center;overflow:hidden}
+    .canvas{position:relative;background:#fff;border-radius:6px;box-shadow:0 6px 18px rgba(10,10,10,0.06);max-width:1200px;max-height:880px;width:95%;height:90%}
+    .base-img{width:100%;height:100%;object-fit:contain;display:block}
+
+    /* Hotspots como botões circulares */
+    .hotspot{position:absolute;width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 10px rgba(0,0,0,0.12);cursor:pointer;border:3px solid rgba(255,255,255,0.92);background:linear-gradient(180deg,#fff,#f2f2f8)}
+    .hotspot .dot{width:14px;height:14px;border-radius:50%;background:var(--accent)}
+    .hotspot:hover{transform:scale(1.08)}
+
+    /* Overlay da máquina (drill-down) */
+    .overlay{position:absolute;inset:0;background:rgba(5,7,12,0.45);display:none;align-items:center;justify-content:center}
+    .overlay .card{width:900px;height:640px;background:#fff;border-radius:10px;position:relative;padding:16px;display:flex}
+    .machine-left{flex:0 0 60%;position:relative;border-right:1px solid #eee;padding-right:12px}
+    .machine-right{flex:1;padding-left:12px;overflow:auto}
+    .machine-img{width:100%;height:100%;object-fit:contain}
+    .comp-hotspot{position:absolute;width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:#fff;border:2px solid #333;cursor:pointer}
+
+    /* Zoom controls */
+    .controls{position:absolute;right:12px;top:12px;display:flex;flex-direction:column;gap:8px}
+    .controls button{width:42px;height:34px;border-radius:6px;border:none;background:#fff;box-shadow:0 4px 10px rgba(0,0,0,0.08);cursor:pointer}
+    .close-x{position:absolute;right:14px;top:8px;cursor:pointer}
+
+    /* Responsividade */
+    @media (max-width:900px){.sidebar{display:none}.canvas{max-width:100%;height:100%}}
+  </style>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <h2>Mapa de Quebras — Planta de Centrifugação</h2>
+    <div class="meta">Clique em uma máquina no mapa para ver detalhes e explorar componentes.</div>
+
+    <div id="selectedInfo" class="info-row">
+      <strong>Nenhuma máquina selecionada</strong>
+      <div class="meta">Clique em um hotspot na planta para carregar as informações.</div>
+    </div>
+
+    <div style="margin-top:12px">
+      <div style="font-weight:600">Filtros / Ações</div>
+      <div style="margin-top:8px">
+        <label style="font-size:13px;color:#555">Período</label>
+        <select id="periodSelect" style="width:100%;margin-top:6px;padding:8px;border-radius:6px;border:1px solid #ddd">
+          <option>Últimas 24h</option>
+          <option>Últimos 7 dias</option>
+          <option>Últimos 30 dias</option>
+        </select>
+      </div>
+
+      <div style="margin-top:10px;display:flex;gap:8px">
+        <button class="btn" onclick="exportExample()">Exportar CSV</button>
+        <button class="btn" style="background:#444" onclick="resetView()">Resetar</button>
+      </div>
+    </div>
+
+    <div style="margin-top:18px">
+      <div style="font-weight:600">Exemplo rápido (dados)</div>
+      <div id="machineStats" style="margin-top:8px;color:#333"></div>
+    </div>
+
+    <div style="margin-top:18px;color:#777;font-size:13px">Suba sua imagem da planta ou troque os hotspots pelo painel de edição no código.</div>
+  </aside>
+
+  <main class="map-area">
+    <div class="canvas" id="canvas">
+      <img id="plant" class="base-img" src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='1600' height='1000'><rect width='100%' height='100%' fill='%23ffffff'/><text x='50' y='60' font-size='42' fill='%23333'>Planta: Área de Centrifugação (exemplo)</text><rect x='100' y='120' width='300' height='220' fill='%23f8e6f0' stroke='%23e6c2d3' /><text x='120' y='160' font-size='20' fill='%23333'>Lado A - Bancadas</text><rect x='480' y='120' width='420' height='220' fill='%23f2f2f2' stroke='%23d8d8d8'/><text x='500' y='160' font-size='20' fill='%23333'>Área Centrifugas</text></svg>" alt="planta"/>
+
+      <!-- hotspots da planta (x%, y% relativos ao container) -->
+      <div class="hotspot" data-id="M01" title="Máquina 01" style="left:58%;top:32%;transform:translate(-50%,-50%)">
+        <div class="dot"></div>
+      </div>
+
+      <div class="hotspot" data-id="M02" title="Máquina 02" style="left:72%;top:35%;transform:translate(-50%,-50%);background:linear-gradient(180deg,#fff,#fff8ee);">
+        <div class="dot"></div>
+      </div>
+
+      <div class="controls">
+        <button id="zoomIn">+</button>
+        <button id="zoomOut">−</button>
+      </div>
+
+      <!-- overlay drill-down -->
+      <div id="overlay" class="overlay">
+        <div class="card">
+          <div class="machine-left">
+            <img id="machineImg" class="machine-img" src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='900' height='640'><rect width='100%' height='100%' fill='%23fff'/><text x='20' y='32' font-size='22' fill='%23333'>Máquina — Visualização detalhada (exemplo)</text><rect x='40' y='80' width='380' height='420' fill='%23f7f7fa' stroke='%23ddd'/><text x='64' y='120' font-size='16' fill='%23333'>Vista da Máquina (imagem técnica)</text></svg>" />
+
+            <!-- hotspots de componentes (posições relativas dentro do bloco da machine image) -->
+            <div class="comp-hotspot" data-comp="Rolamento" title="Rolamento" style="left:22%;top:45%;transform:translate(-50%,-50%)">R</div>
+            <div class="comp-hotspot" data-comp="Motor" title="Motor" style="left:40%;top:68%;transform:translate(-50%,-50%)">M</div>
+            <div class="comp-hotspot" data-comp="Eixo" title="Eixo" style="left:62%;top:48%;transform:translate(-50%,-50%)">E</div>
+          </div>
+
+          <div class="machine-right">
+            <div style="display:flex;align-items:center;justify-content:space-between">
+              <h3 id="machineTitle">Máquina</h3>
+              <div class="close-x"><button onclick="closeOverlay()">Fechar</button></div>
+            </div>
+
+            <div id="machinePanel">
+              <div style="margin:10px 0"><strong>Última quebra:</strong> <span id="lastBreak">—</span></div>
+              <div style="margin:10px 0"><strong>Total paradas (30d):</strong> <span id="totalStops">—</span></div>
+              <div style="margin:10px 0"><strong>Tempo médio parada:</strong> <span id="avgStop">—</span></div>
+              <div style="margin:10px 0"><strong>Motivos mais comuns:</strong>
+                <ul id="commonReasons"></ul>
+              </div>
+              <div style="margin-top:12px">
+                <button class="btn" onclick="openComponentDetails()">Ver componentes</button>
+                <button class="btn" style="background:#0b74de;margin-left:8px" onclick="goToOI()">Abrir OS/Histórico</button>
+              </div>
+            </div>
+
+            <hr style="margin:12px 0;border:none;border-top:1px solid #eee">
+
+            <div id="componentDetails"></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </main>
+</div>
+
+<script>
+// --- Dados de exemplo ---
+Index(['Criado por', 'Data de entrada', 'Nota', 'Ordem', 'Tipo de ordem',
+       'CenTrab respon.', 'Centro custo', 'Texto breve', 'Loc.instalação',
+       'Denominação', 'Equipamento', 'Denominação.1', 'Status sistema',
+       'InícReal hr.', 'Hora referência', 'Grp.plnj.PM', 'Tipo ativid.PM',
+       'Prioridade', 'Cust.tot.reais'],
+      dtype='object')
+// Objeto DB gerado automaticamente da planilha
+  const DB = { machines: {"FIT09": {"id": "FIT09","name": "Forno Elétrico It09","paradas": [
+        "2025-08-12",
+        "2025-08-11",
+        "2025-08-09",
+        "2025-08-08",
+        "2025-08-08",
+        "2025-08-07",
+        "2025-08-07",
+        "2025-08-06",
+        "2025-08-05",
+        "2025-08-04",
+        "2025-08-04",
+        "2025-08-01",
+        "2025-08-01",
+        "2025-08-01",
+        "2025-08-01",
+        "2025-08-01",
+        "2025-08-01",
+        "2025-07-31",
+        "2025-07-31",
+        "2025-07-31",
+        "2025-07-30",
+        "2025-07-29",
+        "2025-07-28",
+        "2025-07-28",
+        "2025-07-27",
+        "2025-07-25",
+        "2025-07-25",
+        "2025-07-25",
+        "2025-07-24",
+        "2025-07-23",
+        "2025-07-22",
+        "2025-07-17",
+        "2025-07-17",
+        "2025-07-17",
+        "2025-07-17",
+        "2025-07-17",
+        "2025-07-16",
+        "2025-07-15",
+        "2025-07-11",
+        "2025-07-11",
+        "2025-07-08",
+        "2025-07-07",
+        "2025-07-07",
+        "2025-07-04",
+        "2025-07-04",
+        "2025-07-04",
+        "2025-07-04",
+        "2025-07-04",
+        "2025-07-04",
+        "2025-07-04",
+        "2025-07-04",
+        "2025-07-03",
+        "2025-07-03",
+        "2025-07-02",
+        "2025-07-02",
+        "2025-06-28",
+        "2025-06-27",
+        "2025-06-26",
+        "2025-06-26",
+        "2025-06-26",
+        "2025-06-26",
+        "2025-06-26",
+        "2025-06-26",
+        "2025-06-26",
+        "2025-06-24",
+        "2025-06-23",
+        "2025-06-23",
+        "2025-06-23",
+        "2025-06-19",
+        "2025-06-19",
+        "2025-06-18",
+        "2025-06-16",
+        "2025-06-14",
+        "2025-06-13",
+        "2025-06-12",
+        "2025-06-12",
+        "2025-06-12",
+        "2025-06-10",
+        "2025-06-09",
+        "2025-06-09",
+        "2025-06-08",
+        "2025-06-06",
+        "2025-06-06",
+        "2025-06-06",
+        "2025-06-06",
+        "2025-06-06",
+        "2025-06-05",
+        "2025-06-05",
+        "2025-06-05",
+        "2025-06-03",
+        "2025-06-03",
+        "2025-06-01",
+        "2025-05-30",
+        "2025-05-30",
+        "2025-05-30",
+        "2025-05-30",
+        "2025-05-30",
+        "2025-05-30",
+        "2025-05-29",
+        "2025-05-29",
+        "2025-05-28",
+        "2025-05-28",
+        "2025-05-26",
+        "2025-05-25",
+        "2025-05-24",
+        "2025-05-22",
+        "2025-05-22",
+        "2025-05-22",
+        "2025-05-22",
+        "2025-05-22",
+        "2025-05-22",
+        "2025-05-22",
+        "2025-05-22",
+        "2025-05-22",
+        "2025-05-22",
+        "2025-05-21",
+        "2025-05-19",
+        "2025-05-18",
+        "2025-05-17",
+        "2025-05-16",
+        "2025-05-16",
+        "2025-05-16",
+        "2025-05-16",
+        "2025-05-16",
+        "2025-05-15",
+        "2025-05-14",
+        "2025-05-14",
+        "2025-05-13",
+        "2025-05-13",
+        "2025-05-11",
+        "2025-05-11",
+        "2025-05-11",
+        "2025-05-09",
+        "2025-05-09",
+        "2025-05-09",
+        "2025-05-09",
+        "2025-05-09",
+        "2025-05-09",
+        "2025-05-09",
+        "2025-05-04",
+        "2025-05-04",
+        "2025-05-02",
+        "2025-05-01",
+        "2025-05-01",
+        "2025-04-25",
+        "2025-04-25",
+        "2025-04-25",
+        "2025-04-25",
+        "2025-04-25",
+        "2025-04-25",
+        "2025-04-25",
+        "2025-04-22",
+        "2025-04-17",
+        "2025-04-17",
+        "2025-04-17",
+        "2025-04-17",
+        "2025-04-17",
+        "2025-04-17",
+        "2025-04-17",
+        "2025-04-17",
+        "2025-04-16",
+        "2025-04-16",
+        "2025-04-12",
+        "2025-04-11",
+        "2025-04-11",
+        "2025-04-11",
+        "2025-04-11",
+        "2025-04-10",
+        "2025-04-08",
+        "2025-04-08",
+        "2025-04-08",
+        "2025-04-04",
+        "2025-04-04",
+        "2025-04-04",
+        "2025-04-04",
+        "2025-04-04",
+        "2025-04-04",
+        "2025-04-03",
+        "2025-03-29",
+        "2025-03-28",
+        "2025-03-28",
+        "2025-03-28",
+        "2025-03-27",
+        "2025-03-27",
+        "2025-03-27",
+        "2025-03-25",
+        "2025-03-21",
+        "2025-03-21",
+        "2025-03-20",
+        "2025-03-20",
+        "2025-03-20",
+        "2025-03-17",
+        "2025-03-15",
+        "2025-03-14",
+        "2025-03-13",
+        "2025-03-13",
+        "2025-03-13",
+        "2025-03-13",
+        "2025-03-13",
+        "2025-03-13",
+        "2025-03-13",
+        "2025-03-13",
+        "2025-03-13",
+        "2025-03-13",
+        "2025-03-11",
+        "2025-03-11",
+        "2025-03-11",
+        "2025-03-11",
+        "2025-03-10",
+        "2025-03-10",
+        "2025-03-07",
+        "2025-03-07",
+        "2025-03-07",
+        "2025-03-07",
+        "2025-03-07",
+        "2025-03-06",
+        "2025-03-06",
+        "2025-03-06",
+        "2025-03-05",
+        "2025-03-05",
+        "2025-02-28",
+        "2025-02-28",
+        "2025-02-28",
+        "2025-02-28",
+        "2025-02-28",
+        "2025-02-28",
+        "2025-02-27",
+        "2025-02-27",
+        "2025-02-24",
+        "2025-02-24",
+        "2025-02-21",
+        "2025-02-21",
+        "2025-02-21",
+        "2025-02-21",
+        "2025-02-21",
+        "2025-02-21",
+        "2025-02-21",
+        "2025-02-21",
+        "2025-02-21",
+        "2025-02-21",
+        "2025-02-18",
+        "2025-02-14",
+        "2025-02-14",
+        "2025-02-14",
+        "2025-02-14",
+        "2025-02-14",
+        "2025-02-14",
+        "2025-02-14",
+        "2025-02-13",
+        "2025-02-12",
+        "2025-02-11",
+        "2025-02-07",
+        "2025-02-07",
+        "2025-02-07",
+        "2025-02-07",
+        "2025-02-07",
+        "2025-02-07",
+        "2025-02-06",
+        "2025-02-06",
+        "2025-02-06",
+        "2025-02-05",
+        "2025-02-04",
+        "2025-02-03",
+        "2025-02-02",
+        "2025-02-02",
+        "2025-02-02",
+        "2025-01-31",
+        "2025-01-31",
+        "2025-01-31",
+        "2025-01-31",
+        "2025-01-31",
+        "2025-01-24",
+        "2025-01-24",
+        "2025-01-24",
+        "2025-01-24",
+        "2025-01-24",
+        "2025-01-23",
+        "2025-01-23",
+        "2025-01-21",
+        "2025-01-21",
+        "2025-01-19",
+        "2025-01-19",
+        "2025-01-19",
+        "2025-01-18",
+        "2025-01-17",
+        "2025-01-16",
+        "2025-01-16",
+        "2025-01-09",
+        "2025-01-09",
+        "2025-01-09",
+        "2025-01-09",
+        "2024-12-13",
+        "2024-12-12",
+        "2024-12-12",
+        "2024-12-11",
+        "2024-12-11",
+        "2024-12-11",
+        "2024-12-11",
+        "2024-12-09",
+        "2024-12-09",
+        "2024-12-08",
+        "2024-12-08",
+        "2024-12-07",
+        "2024-12-07",
+        "2024-12-07",
+        "2024-12-07",
+        "2024-12-07",
+        "2024-12-07",
+        "2024-12-06",
+        "2024-12-06",
+        "2024-12-06",
+        "2024-12-05",
+        "2024-11-30",
+        "2024-11-29",
+        "2024-11-29",
+        "2024-11-28",
+        "2024-11-28",
+        "2024-11-26",
+        "2024-11-25",
+        "2024-11-25",
+        "2024-11-25",
+        "2024-11-24",
+        "2024-11-21",
+        "2024-11-21",
+        "2024-11-20",
+        "2024-11-20",
+        "2024-11-19",
+        "2024-11-16",
+        "2024-11-14",
+        "2024-11-14",
+        "2024-11-14",
+        "2024-11-14",
+        "2024-11-14",
+        "2024-11-13",
+        "2024-11-12",
+        "2024-11-12",
+        "2024-11-08",
+        "2024-11-08",
+        "2024-11-08",
+        "2024-11-08",
+        "2024-11-08",
+        "2024-11-08",
+        "2024-11-06",
+        "2024-11-01",
+        "2024-11-01",
+        "2024-11-01",
+        "2024-11-01",
+        "2024-10-31",
+        "2024-10-29",
+        "2024-10-29",
+        "2024-10-26",
+        "2024-10-26",
+        "2024-10-25",
+        "2024-10-25",
+        "2024-10-25",
+        "2024-10-25",
+        "2024-10-25",
+        "2024-10-25",
+        "2024-10-23",
+        "2024-10-21",
+        "2024-10-21",
+        "2024-10-19",
+        "2024-10-18",
+        "2024-10-18",
+        "2024-10-18",
+        "2024-10-18",
+        "2024-10-18",
+        "2024-10-17",
+        "2024-10-17",
+        "2024-10-17",
+        "2024-10-17",
+        "2024-10-17",
+        "2024-10-17",
+        "2024-10-16",
+        "2024-10-16",
+        "2024-10-16",
+        "2024-10-15",
+        "2024-10-15",
+        "2024-10-12",
+        "2024-10-11",
+        "2024-10-11",
+        "2024-10-11",
+        "2024-10-11",
+        "2024-10-11",
+        "2024-10-11",
+        "2024-10-11",
+        "2024-10-11",
+        "2024-10-11",
+        "2024-10-11",
+        "2024-10-11",
+        "2024-10-11",
+        "2024-10-11",
+        "2024-10-11",
+        "2024-10-11",
+        "2024-10-10",
+        "2024-10-09",
+        "2024-10-03",
+        "2024-10-03",
+        "2024-10-03",
+        "2024-10-03",
+        "2024-10-02",
+        "2024-10-02",
+        "2024-10-01",
+        "2024-09-30",
+        "2024-09-30",
+        "2024-09-30",
+        "2024-09-30",
+        "2024-09-27",
+        "2024-09-27",
+        "2024-09-27",
+        "2024-09-27",
+        "2024-09-27",
+        "2024-09-27",
+        "2024-09-25",
+        "2024-09-20",
+        "2024-09-20",
+        "2024-09-20",
+        "2024-09-20",
+        "2024-09-20",
+        "2024-09-19",
+        "2024-09-19",
+        "2024-09-14",
+        "2024-09-13",
+        "2024-09-13",
+        "2024-09-13",
+        "2024-09-13",
+        "2024-09-13",
+        "2024-09-13",
+        "2024-09-13",
+        "2024-09-13",
+        "2024-09-11",
+        "2024-09-10",
+        "2024-09-10",
+        "2024-09-09",
+        "2024-09-09",
+        "2024-09-09",
+        "2024-09-08",
+        "2024-09-07",
+        "2024-09-06",
+        "2024-09-06",
+        "2024-09-06",
+        "2024-09-06",
+        "2024-09-06",
+        "2024-09-06",
+        "2024-09-06",
+        "2024-09-06",
+        "2024-09-05",
+        "2024-09-05",
+        "2024-09-02",
+        "2024-08-31",
+        "2024-08-30",
+        "2024-08-30",
+        "2024-08-30",
+        "2024-08-30",
+        "2024-08-28",
+        "2024-08-28",
+        "2024-08-27",
+        "2024-08-23",
+        "2024-08-23",
+        "2024-08-23",
+        "2024-08-22",
+        "2024-08-22",
+        "2024-08-21",
+        "2024-08-19",
+        "2024-08-19",
+        "2024-08-16",
+        "2024-08-16",
+        "2024-08-14",
+        "2024-08-12",
+        "2024-08-12",
+        "2024-08-11",
+        "2024-08-08",
+        "2024-08-07",
+        "2024-08-06",
+        "2024-08-05",
+        "2024-08-01",
+        "2024-07-29",
+        "2024-07-26",
+        "2024-07-25",
+        "2024-07-25",
+        "2024-07-19",
+        "2024-07-19",
+        "2024-07-19",
+        "2024-07-19",
+        "2024-07-17",
+        "2024-07-16",
+        "2024-07-11",
+        "2024-07-05",
+        "2024-07-05",
+        "2024-07-04",
+        "2024-07-04",
+        "2024-07-01",
+        "2024-06-30",
+        "2024-06-28",
+        "2024-06-26",
+        "2024-06-22",
+        "2024-06-21",
+        "2024-06-21",
+        "2024-06-20",
+        "2024-06-14",
+        "2024-06-14",
+        "2024-06-14",
+        "2024-06-13",
+        "2024-06-05",
+        "2024-06-05"]}}}
+
+// Seleção e UI
+const hotspots = document.querySelectorAll('.hotspot');
+const selectedInfo = document.getElementById('selectedInfo');
+const machineStats = document.getElementById('machineStats');
+const overlay = document.getElementById('overlay');
+const machineTitle = document.getElementById('machineTitle');
+const lastBreak = document.getElementById('lastBreak');
+const totalStops = document.getElementById('totalStops');
+const avgStop = document.getElementById('avgStop');
+const commonReasons = document.getElementById('commonReasons');
+const componentDetails = document.getElementById('componentDetails');
+
+hotspots.forEach(h => h.addEventListener('click', (e)=>{ const id = h.dataset.id; onSelectMachine(id)}));
+
+function onSelectMachine(id){
+  const m = DB.machines[id];
+  if(!m) return;
+  selectedInfo.innerHTML = `<strong>${m.name} (${m.id})</strong>\n<div class=\"meta\">Última quebra: ${m.lastBreak} — Paradas 30d: ${m.stops30}</div>`;
+  // popular stats
+  machineStats.innerHTML = `<div><strong>${m.name}</strong></div><div style=\"color:#555;margin-top:6px\">Paradas (30d): ${m.stops30} · Média: ${m.avgStop}</div>`;
+  // abrir overlay
+  openOverlayFor(id);
+}
+
+function openOverlayFor(id){
+  const m = DB.machines[id];
+  if(!m) return;
+  machineTitle.innerText = `${m.name} — ${m.id}`;
+
+  // Paradas
+  const paradas = m.paradas || [];
+  paradas.sort((a,b) => new Date(b) - new Date(a)); // decrescente
+
+  lastBreak.innerText = paradas.length ? paradas[0] : '—';
+  totalStops.innerText = paradas.length;
+  avgStop.innerText = 'N/D'; // pode calcular se tiver dados de duração
+
+  // Exemplo de motivos (ainda estático)
+  commonReasons.innerHTML = '<li>Dados não disponíveis</li>';
+
+  // Limpar e criar hotspots dos componentes dinâmicos
+  const machineLeft = document.querySelector('.machine-left');
+  // Remover hotspots antigos
+  machineLeft.querySelectorAll('.comp-hotspot').forEach(el => el.remove());
+
+  // Criar hotspots para componentes, posição aleatória só para exemplo
+  const comps = m.components || {};
+  let i = 0;
+  for (const compName in comps){
+    const comp = comps[compName];
+    const hotspot = document.createElement('div');
+    hotspot.className = 'comp-hotspot';
+    hotspot.textContent = compName.charAt(0).toUpperCase();
+    hotspot.title = comp.name;
+    // posições básicas para exemplo (espalhar)
+    hotspot.style.left = (20 + i*20) + '%';
+    hotspot.style.top = (40 + (i%3)*15) + '%';
+    hotspot.dataset.comp = compName;
+    hotspot.addEventListener('click', ()=> showComponent(compName));
+    machineLeft.appendChild(hotspot);
+    i++;
+  }
+
+  componentDetails.innerHTML = '<em>Selecione um componente no desenho para ver detalhes.</em>';
+  overlay.style.display = 'flex';
+}
+
+function closeOverlay(){ overlay.style.display = 'none'; }
+
+// hotspots nos componentes
+const comps = document.querySelectorAll('.comp-hotspot');
+comps.forEach(c=>c.addEventListener('click', (e)=>{ const compName = c.dataset.comp; showComponent(compName)}));
+
+function showComponent(name){
+  // pegar dados atuais do machineTitle (assumimos que a máquina atual está no título)
+  const key = machineTitle.innerText.split('—')[1]?.trim() || 'M01';
+  const m = DB.machines[key] || DB.machines['M01'];
+  const comp = m.components[name];
+  if(!comp){ componentDetails.innerHTML = '<div>Componente sem dados</div>'; return }
+  componentDetails.innerHTML = `<div style=\"padding:8px;border-radius:8px;background:#fbfbfd;border:1px solid #eee\"><strong>${comp.name}</strong><div style=\"margin-top:6px\">ID: ${comp.id}</div><div style=\"margin-top:6px\">Última falha: ${comp.lastFail}</div><div style=\"margin-top:6px\">Total falhas: ${comp.failures}</div><div style=\"margin-top:6px;color:#555\">Notas: ${comp.notes}</div><div style=\"margin-top:8px\"><button class=\"btn\">Abrir histórico detalhado</button></div></div>`;
+}
+
+// controles de zoom simples (ajusta transform do container img)
+let scale = 1;
+const plant = document.getElementById('plant');
+const canvas = document.getElementById('canvas');
+document.getElementById('zoomIn').addEventListener('click', ()=>{ scale = Math.min(2.5, scale+0.2); plant.style.transform = `scale(${scale})`; });
+document.getElementById('zoomOut').addEventListener('click', ()=>{ scale = Math.max(0.6, scale-0.2); plant.style.transform = `scale(${scale})`; });
+
+function resetView(){ scale = 1; plant.style.transform = `scale(1)`; selectedInfo.innerHTML = '<strong>Nenhuma máquina selecionada</strong><div class="meta">Clique em um hotspot na planta para carregar as informações.</div>'; overlay.style.display='none'; }
+
+function exportExample(){
+  // gera CSV de exemplo com paradas por máquina
+  const rows = [['machine','lastBreak','stops30','avgStop']];
+  for(const k in DB.machines){ const m=DB.machines[k]; rows.push([m.id,m.lastBreak,m.stops30,m.avgStop]); }
+  const csv = rows.map(r=>r.map(c=>`"${c}"`).join(',')).join('\n');
+  const blob = new Blob([csv],{type:'text/csv'});
+  const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href=url; a.download='paradas_exemplo.csv'; a.click();
+}
+
+function openComponentDetails(){ alert('Aqui poderia abrir uma página com histórico/tablets, ou navegar para um dashboard externo (PowerBI / Grafana)'); }
+function goToOI(){ alert('Abrir OI / Sistema de Historico — placeholder'); }
+
+// inicializa
+resetView();
+</script>
+</body>
+</html>
