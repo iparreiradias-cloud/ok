@@ -64,11 +64,13 @@
       <div style="font-weight:600">Filtros / Ações</div>
       <div style="margin-top:8px">
         <label style="font-size:13px;color:#555">Período</label>
-        <select id="periodSelect" style="width:100%;margin-top:6px;padding:8px;border-radius:6px;border:1px solid #ddd">
-          <option>Últimas 24h</option>
-          <option>Últimos 7 dias</option>
-          <option>Últimos 30 dias</option>
-        </select>
+        <div style="display:flex;gap:8px;margin-top:6px">
+          <input id="dateStart" type="date" style="flex:1;padding:8px;border-radius:6px;border:1px solid #ddd" />
+          <input id="dateEnd" type="date" style="flex:1;padding:8px;border-radius:6px;border:1px solid #ddd" />
+        </div>
+        <div style="margin-top:8px">
+          <button class="btn" onclick="applyDateFilter()">Aplicar filtro</button>
+        </div>
       </div>
 
       <div style="margin-top:10px;display:flex;gap:8px">
@@ -259,6 +261,102 @@ function getSampleDB(){
 let DB = getSampleDB();
 let currentMachineKey = null;
 
+// Eventos brutos para re-filtragem por data (preenchidos ao importar)
+let RAW_EVENTS = [];
+
+// Estado de filtro de datas
+let FILTER = { start: null, end: null };
+
+function setDateFilter(startISO, endISO){
+  FILTER.start = startISO ? new Date(startISO) : null;
+  FILTER.end = endISO ? new Date(endISO) : null;
+}
+
+function isDateInRange(dateStr){
+  if (!dateStr) return false;
+  const d = new Date(dateStr);
+  if (isNaN(d)) return false;
+  if (FILTER.start && d < FILTER.start) return false;
+  if (FILTER.end){
+    // incluir fim do dia
+    const end = new Date(FILTER.end.getFullYear(), FILTER.end.getMonth(), FILTER.end.getDate(), 23,59,59,999);
+    if (d > end) return false;
+  }
+  return true;
+}
+
+function buildDBFromRawEvents(rawEvents){
+  const machines = {};
+  for (const ev of rawEvents){
+    const { machineName, machineId, componentName, dateStr } = ev;
+    if (!machineId || !dateStr) continue;
+
+    if (!machines[machineId]){
+      machines[machineId] = {
+        id: machineId,
+        name: machineName || machineId,
+        paradas: [],
+        lastBreak: null,
+        stops30: 0,
+        avgStop: 'N/D',
+        reasons: [],
+        components: {}
+      };
+    }
+
+    machines[machineId].paradas.push(dateStr);
+
+    if (!machines[machineId].components[componentName]){
+      machines[machineId].components[componentName] = {
+        id: slugify(componentName),
+        name: componentName,
+        failures: 0,
+        lastFail: null,
+        notes: ''
+      };
+    }
+    const comp = machines[machineId].components[componentName];
+    comp.failures += 1;
+    if (!comp.lastFail || new Date(dateStr) > new Date(comp.lastFail)) comp.lastFail = dateStr;
+  }
+
+  const now = new Date();
+  const last30 = new Date(now.getFullYear(), now.getMonth(), now.getDate()-30);
+  for (const key in machines){
+    const m = machines[key];
+    m.paradas.sort((a,b) => new Date(b) - new Date(a));
+    m.lastBreak = m.paradas[0] || null;
+    m.stops30 = m.paradas.filter(d => new Date(d) >= last30).length;
+
+    const entries = Object.entries(m.components).map(([name, comp]) => ({ name, count: comp.failures }));
+    entries.sort((a,b) => b.count - a.count);
+    m.reasons = entries.slice(0,3).map(e => e.name);
+  }
+  return { machines };
+}
+
+function getFilteredDB(){
+  if (!RAW_EVENTS.length || (!FILTER.start && !FILTER.end)) return DB;
+  const filtered = RAW_EVENTS.filter(e => isDateInRange(e.dateStr));
+  return buildDBFromRawEvents(filtered);
+}
+
+function applyDateFilter(){
+  const start = document.getElementById('dateStart').value || null;
+  const end = document.getElementById('dateEnd').value || null;
+  setDateFilter(start, end);
+  const newDB = getFilteredDB();
+  // manter currentMachine se existir
+  const prevMachine = currentMachineKey;
+  DB = newDB;
+  renderMachineHotspots();
+  if (prevMachine && DB.machines[prevMachine]){
+    onSelectMachine(prevMachine);
+  } else {
+    resetView();
+  }
+}
+
 // ================= Renderização de Hotspots =================
 function renderMachineHotspots(){
   const canvas = document.getElementById('canvas');
@@ -361,15 +459,16 @@ function openOverlayFor(id){
   const machineLeft = document.querySelector('.machine-left');
   machineLeft.querySelectorAll('.comp-hotspot').forEach(el => el.remove());
 
-  // Criar hotspots de componentes em grade
+  // Criar hotspots de componentes em grade, exibindo contagem
   const compList = Object.keys(m.components || {});
   const compPositions = generateGridPositions(compList.length);
   compList.forEach((compName, idx) => {
     const pos = compPositions[idx] || { left:'50%', top:'50%'};
+    const comp = m.components[compName];
     const hotspot = document.createElement('div');
     hotspot.className = 'comp-hotspot';
-    hotspot.textContent = compName.charAt(0).toUpperCase();
-    hotspot.title = m.components[compName].name || compName;
+    hotspot.textContent = String(comp.failures ?? 0);
+    hotspot.title = `${comp.name || compName} — falhas: ${comp.failures ?? 0}`;
     hotspot.style.left = pos.left;
     hotspot.style.top = pos.top;
     hotspot.style.transform = 'translate(-50%,-50%)';
@@ -434,7 +533,28 @@ function handleFileUpload(ev){
       const wb = XLSX.read(data, { type: 'array', cellDates: true });
       const sheet = wb.Sheets[wb.SheetNames[0]];
       const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: '' });
-      DB = buildDBFromAOA(rows);
+
+      // construir eventos brutos
+      RAW_EVENTS = [];
+      const idxDate = COL_INDEX.date;
+      const idxMachine = COL_INDEX.machine;
+      const idxComponent = COL_INDEX.component;
+      for (let i=0; i<rows.length; i++){
+        const row = rows[i];
+        if (!row || !Array.isArray(row)) continue;
+        const machineName = toStringSafe(row[idxMachine]);
+        const componentNameRaw = row[idxComponent];
+        const componentName = toStringSafe(componentNameRaw) || 'Sem componente';
+        const dateObj = parseExcelDate(row[idxDate]);
+        if (!machineName || !dateObj) continue;
+        const mKeyRaw = slugify(machineName) || `m-${i}`;
+        const mKey = canonicalizeMachineSlug(mKeyRaw);
+        const dateStr = formatDateISO(dateObj);
+        RAW_EVENTS.push({ machineName, machineId: mKey, componentName, dateStr });
+      }
+
+      // DB completo (sem filtro) e reset
+      DB = buildDBFromRawEvents(RAW_EVENTS);
       renderMachineHotspots();
       resetView();
       machineStats.innerHTML = '<div style="color:#0a0">Planilha carregada com sucesso.</div>';
@@ -444,72 +564,6 @@ function handleFileUpload(ev){
     }
   };
   reader.readAsArrayBuffer(file);
-}
-
-function buildDBFromAOA(rows){
-  const idxDate = COL_INDEX.date;
-  const idxMachine = COL_INDEX.machine;
-  const idxComponent = COL_INDEX.component;
-
-  const machines = {};
-
-  for (let i=0; i<rows.length; i++){
-    const row = rows[i];
-    if (!row || !Array.isArray(row)) continue;
-
-    const machineName = toStringSafe(row[idxMachine]);
-    const componentNameRaw = row[idxComponent];
-    const componentName = toStringSafe(componentNameRaw) || 'Sem componente';
-    const dateObj = parseExcelDate(row[idxDate]);
-
-    if (!machineName || !dateObj) continue; // ignora linhas vazias / cabeçalho
-
-    const mKeyRaw = slugify(machineName) || `m-${i}`;
-    const mKey = canonicalizeMachineSlug(mKeyRaw);
-    if (!machines[mKey]){
-      machines[mKey] = {
-        id: mKey,
-        name: machineName,
-        paradas: [],
-        lastBreak: null,
-        stops30: 0,
-        avgStop: 'N/D',
-        reasons: [],
-        components: {}
-      };
-    }
-
-    const dateStr = formatDateISO(dateObj);
-    machines[mKey].paradas.push(dateStr);
-
-    if (!machines[mKey].components[componentName]){
-      machines[mKey].components[componentName] = {
-        id: slugify(componentName) || `comp-${i}`,
-        name: componentName,
-        failures: 0,
-        lastFail: null,
-        notes: ''
-      };
-    }
-    const comp = machines[mKey].components[componentName];
-    comp.failures += 1;
-    if (!comp.lastFail || new Date(dateStr) > new Date(comp.lastFail)) comp.lastFail = dateStr;
-  }
-
-  const now = new Date();
-  const last30 = new Date(now.getFullYear(), now.getMonth(), now.getDate()-30);
-  for (const key in machines){
-    const m = machines[key];
-    m.paradas.sort((a,b) => new Date(b) - new Date(a));
-    m.lastBreak = m.paradas[0] || null;
-    m.stops30 = m.paradas.filter(d => new Date(d) >= last30).length;
-
-    const entries = Object.entries(m.components).map(([name, comp]) => ({ name, count: comp.failures }));
-    entries.sort((a,b) => b.count - a.count);
-    m.reasons = entries.slice(0,3).map(e => e.name);
-  }
-
-  return { machines };
 }
 
 // ================= Inicialização =================
