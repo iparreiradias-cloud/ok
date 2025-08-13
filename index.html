@@ -346,21 +346,56 @@ function applyDateFilter(){
   const start = document.getElementById('dateStart').value || null;
   const end = document.getElementById('dateEnd').value || null;
   setDateFilter(start, end);
+  const prevDB = DB;
+  const overlayIsOpen = (overlay && overlay.style.display === 'flex');
+  const selected = currentMachineKey;
+
   const newDB = getFilteredDB();
   DB = newDB;
-  currentMachineKey = null;
-  renderMachineHotspots();
-  resetView();
+
+  if (overlayIsOpen && selected){
+    // garantir máquina atual mesmo sem ocorrências no período
+    if (!DB.machines[selected]){
+      const prev = prevDB?.machines?.[selected];
+      DB.machines[selected] = {
+        id: selected,
+        name: (prev && prev.name) || selected,
+        paradas: [],
+        lastBreak: null,
+        stops30: 0,
+        avgStop: 'N/D',
+        reasons: [],
+        components: {}
+      };
+    }
+    // atualizar hotspots por trás, mantendo foco e overlay
+    renderMachineHotspots();
+    enterFocusOnMachine(selected);
+    openOverlayFor(selected);
+  } else {
+    currentMachineKey = null;
+    resetView();
+  }
 }
 
 function clearDateFilter(){
   document.getElementById('dateStart').value = '';
   document.getElementById('dateEnd').value = '';
   setDateFilter(null, null);
+
+  const overlayIsOpen = (overlay && overlay.style.display === 'flex');
+  const selected = currentMachineKey;
+
   DB = buildDBFromRawEvents(RAW_EVENTS.length ? RAW_EVENTS : []);
-  currentMachineKey = null;
-  renderMachineHotspots();
-  resetView();
+
+  if (overlayIsOpen && selected && DB.machines[selected]){
+    renderMachineHotspots();
+    enterFocusOnMachine(selected);
+    openOverlayFor(selected);
+  } else {
+    currentMachineKey = null;
+    resetView();
+  }
 }
 
 // ================= Renderização de Hotspots =================
